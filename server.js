@@ -9,9 +9,21 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Database connection
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+let pool;
+try {
+  if (process.env.DATABASE_URL) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      // Add connection timeout for serverless
+      connectionTimeoutMillis: 5000,
+      query_timeout: 10000,
+    });
+  } else {
+    console.warn('DATABASE_URL not set - database operations will fail');
+  }
+} catch (error) {
+  console.error('Failed to create database pool:', error);
+}
 
 // Middleware
 app.use(helmet());
@@ -38,9 +50,12 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'Something went wrong!' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
-
+// Export for Vercel serverless
 module.exports = app;
+
+// Start server locally
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
