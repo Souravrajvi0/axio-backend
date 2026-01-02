@@ -249,12 +249,12 @@ router.post('/transactions', async (req, res) => {
     }
 
     // Resolve category to category_id
-    let category_id;
+    let resolvedCategoryId;
     console.log('POST /api/transactions - Resolving category:', categoryValue);
     if (categoryValue.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
       // It's a UUID
-      category_id = categoryValue;
-      console.log('POST /api/transactions - Category is UUID:', category_id);
+      resolvedCategoryId = categoryValue;
+      console.log('POST /api/transactions - Category is UUID:', resolvedCategoryId);
     } else {
       // Look up by name
       const categoryResult = await client.query('SELECT id FROM categories WHERE name = $1', [categoryValue]);
@@ -263,8 +263,8 @@ router.post('/transactions', async (req, res) => {
         await client.query('ROLLBACK');
         return res.status(400).json({ message: 'Invalid category' });
       }
-      category_id = categoryResult.rows[0].id;
-      console.log('POST /api/transactions - Category resolved to UUID:', category_id);
+      resolvedCategoryId = categoryResult.rows[0].id;
+      console.log('POST /api/transactions - Category resolved to UUID:', resolvedCategoryId);
     }
 
     // Parse date
@@ -293,14 +293,14 @@ router.post('/transactions', async (req, res) => {
     }
 
     // Insert transaction
-    console.log('POST /api/transactions - Inserting transaction with params:', [merchant_name, amount, type, category_id, account_id, transaction_date_str, transaction_time_str, notes]);
+    console.log('POST /api/transactions - Inserting transaction with params:', [merchant_name, amount, type, resolvedCategoryId, account_id, transaction_date_str, transaction_time_str, notes]);
     const transactionResult = await client.query(`
       INSERT INTO transactions (
         merchant_name, amount, type, category_id, account_id,
         transaction_date, transaction_time, notes, source
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual')
       RETURNING *
-    `, [merchant_name, amount, type, category_id, account_id, transaction_date_str, transaction_time_str, notes]);
+    `, [merchant_name, amount, type, resolvedCategoryId, account_id, transaction_date_str, transaction_time_str, notes]);
 
     const transaction = transactionResult.rows[0];
     console.log('POST /api/transactions - Transaction inserted:', transaction.id);
