@@ -2,9 +2,15 @@ const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+// Get pool from server.js or create new one
+let pool;
+if (global.dbPool) {
+  pool = global.dbPool;
+} else {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+}
 
 // GET /api/accounts
 router.get('/accounts', async (req, res) => {

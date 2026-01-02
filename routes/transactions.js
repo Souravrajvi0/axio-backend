@@ -2,9 +2,25 @@ const express = require('express');
 const router = express.Router();
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+// Get pool from server.js or create new one
+let pool;
+if (global.dbPool) {
+  pool = global.dbPool;
+} else {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+}
+
+// Helper function to get tag IDs from tag names
+async function getTagIds(tagNames) {
+  if (!tagNames || tagNames.length === 0) return [];
+  const result = await pool.query(
+    'SELECT id FROM tags WHERE name = ANY($1)',
+    [tagNames]
+  );
+  return result.rows.map(row => row.id);
+}
 
 // Helper function to build transaction query
 async function buildTransactionQuery(filters) {
@@ -178,8 +194,43 @@ router.post('/transactions', async (req, res) => {
 
     const { merchant, amount, type, category, tags, notes, paymentMethod, date } = req.body;
 
+    // Input validation
+    if (!merchant || !amount || !type || !category || !date) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Missing required fields',
+        errors: {
+          merchant: !merchant ? ['Merchant is required'] : undefined,
+          amount: !amount ? ['Amount is required'] : undefined,
+          type: !type ? ['Type is required'] : undefined,
+          category: !category ? ['Category is required'] : undefined,
+          date: !date ? ['Date is required'] : undefined,
+        }
+      });
+    }
+
+    if (type !== 'expense' && type !== 'income') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Invalid type. Must be "expense" or "income"' 
+      });
+    }
+
+    if (isNaN(amount) || parseFloat(amount) < 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Amount must be a positive number' 
+      });
+    }
+
     // Parse date
     const transactionDate = new Date(date);
+    if (isNaN(transactionDate.getTime())) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Invalid date format' 
+      });
+    }
     const transaction_date = transactionDate.toISOString().split('T')[0];
     const transaction_time = transactionDate.toTimeString().split(' ')[0];
 
@@ -238,8 +289,14 @@ router.post('/transactions', async (req, res) => {
     res.status(201).json(formattedTransaction);
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ message: 'Failed to create transaction' });
+    console.error('Error creating transaction:', error);
+    if (error.code === '23503') { // Foreign key violation
+      res.status(400).json({ message: 'Invalid category or account reference' });
+    } else if (error.code === '23505') { // Unique violation
+      res.status(400).json({ message: 'Transaction already exists' });
+    } else {
+      res.status(500).json({ message: 'Failed to create transaction' });
+    }
   } finally {
     client.release();
   }
@@ -253,35 +310,109 @@ router.put('/transactions/:id', async (req, res) => {
 
     const { merchant, amount, type, category, tags, notes, paymentMethod, date } = req.body;
 
-    // Parse date
-    const transactionDate = new Date(date);
-    const transaction_date = transactionDate.toISOString().split('T')[0];
-    const transaction_time = transactionDate.toTimeString().split(' ')[0];
-
-    // Get account ID
-    let account_id = null;
-    if (paymentMethod) {
-      const accountResult = await client.query('SELECT id FROM accounts WHERE name = $1', [paymentMethod]);
-      if (accountResult.rows.length > 0) {
-        account_id = accountResult.rows[0].id;
-      } else {
-        // Create account if not exists
-        const newAccount = await client.query(
-          'INSERT INTO accounts (name, type) VALUES ($1, $2) RETURNING id',
-          [paymentMethod, 'other']
-        );
-        account_id = newAccount.rows[0].id;
-      }
+    // Input validation for provided fields
+    if (type && type !== 'expense' && type !== 'income') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Invalid type. Must be "expense" or "income"' 
+      });
     }
+
+    if (amount !== undefined && (isNaN(amount) || parseFloat(amount) < 0)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        message: 'Amount must be a positive number' 
+      });
+    }
+
+    // Parse date if provided
+    let transaction_date, transaction_time;
+    if (date) {
+      const transactionDate = new Date(date);
+      if (isNaN(transactionDate.getTime())) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ 
+          message: 'Invalid date format' 
+        });
+      }
+      transaction_date = transactionDate.toISOString().split('T')[0];
+      transaction_time = transactionDate.toTimeString().split(' ')[0];
+    }
+
+    // Build dynamic update query
+    const updateFields = [];
+    const updateValues = [];
+    let paramIndex = 1;
+
+    if (merchant !== undefined) {
+      updateFields.push(`merchant_name = $${paramIndex}`);
+      updateValues.push(merchant);
+      paramIndex++;
+    }
+    if (amount !== undefined) {
+      updateFields.push(`amount = $${paramIndex}`);
+      updateValues.push(amount);
+      paramIndex++;
+    }
+    if (type !== undefined) {
+      updateFields.push(`type = $${paramIndex}`);
+      updateValues.push(type);
+      paramIndex++;
+    }
+    if (category !== undefined) {
+      updateFields.push(`category_id = $${paramIndex}`);
+      updateValues.push(category);
+      paramIndex++;
+    }
+    if (paymentMethod !== undefined) {
+      // Get account ID if paymentMethod is provided
+      let account_id = null;
+      if (paymentMethod) {
+        const accountResult = await client.query('SELECT id FROM accounts WHERE name = $1', [paymentMethod]);
+        if (accountResult.rows.length > 0) {
+          account_id = accountResult.rows[0].id;
+        } else {
+          // Create account if not exists
+          const newAccount = await client.query(
+            'INSERT INTO accounts (name, type) VALUES ($1, $2) RETURNING id',
+            [paymentMethod, 'other']
+          );
+          account_id = newAccount.rows[0].id;
+        }
+      }
+      updateFields.push(`account_id = $${paramIndex}`);
+      updateValues.push(account_id);
+      paramIndex++;
+    }
+    if (date !== undefined) {
+      updateFields.push(`transaction_date = $${paramIndex}`);
+      updateValues.push(transaction_date);
+      paramIndex++;
+      updateFields.push(`transaction_time = $${paramIndex}`);
+      updateValues.push(transaction_time);
+      paramIndex++;
+    }
+    if (notes !== undefined) {
+      updateFields.push(`notes = $${paramIndex}`);
+      updateValues.push(notes);
+      paramIndex++;
+    }
+
+    if (updateFields.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+
+    updateFields.push(`updated_at = NOW()`);
+    updateValues.push(req.params.id);
 
     // Update transaction
     const transactionResult = await client.query(`
       UPDATE transactions SET
-        merchant_name = $1, amount = $2, type = $3, category_id = $4, account_id = $5,
-        transaction_date = $6, transaction_time = $7, notes = $8, updated_at = NOW()
-      WHERE id = $9
+        ${updateFields.join(', ')}
+      WHERE id = $${paramIndex}
       RETURNING *
-    `, [merchant, amount, type, category, account_id, transaction_date, transaction_time, notes, req.params.id]);
+    `, updateValues);
 
     if (transactionResult.rows.length === 0) {
       await client.query('ROLLBACK');
@@ -321,8 +452,12 @@ router.put('/transactions/:id', async (req, res) => {
     res.json(formattedTransaction);
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error(error);
-    res.status(500).json({ message: 'Failed to update transaction' });
+    console.error('Error updating transaction:', error);
+    if (error.code === '23503') { // Foreign key violation
+      res.status(400).json({ message: 'Invalid category or account reference' });
+    } else {
+      res.status(500).json({ message: 'Failed to update transaction' });
+    }
   } finally {
     client.release();
   }

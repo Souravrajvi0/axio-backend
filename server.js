@@ -8,7 +8,7 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Database connection
+// Database connection - shared pool for all routes
 let pool;
 try {
   if (process.env.DATABASE_URL) {
@@ -18,6 +18,8 @@ try {
       connectionTimeoutMillis: 5000,
       query_timeout: 10000,
     });
+    // Make pool globally available for route files
+    global.dbPool = pool;
   } else {
     console.warn('DATABASE_URL not set - database operations will fail');
   }
@@ -40,8 +42,30 @@ app.use('/api', require('./routes/accounts'));
 app.use('/api', require('./routes/tags'));
 
 // Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+  try {
+    if (pool) {
+      // Test database connection
+      await pool.query('SELECT 1');
+      res.json({ 
+        status: 'OK', 
+        database: 'connected',
+        timestamp: new Date().toISOString() 
+      });
+    } else {
+      res.status(503).json({ 
+        status: 'ERROR', 
+        database: 'not configured',
+        timestamp: new Date().toISOString() 
+      });
+    }
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'ERROR', 
+      database: 'connection failed',
+      timestamp: new Date().toISOString() 
+    });
+  }
 });
 
 // Error handling
