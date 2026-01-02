@@ -35,6 +35,23 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Root route - API information
+app.get('/', (req, res) => {
+  res.json({
+    name: 'SpendGuard Backend API',
+    version: '1.0.0',
+    status: 'running',
+    endpoints: {
+      health: '/health',
+      transactions: '/api/transactions',
+      categories: '/api/categories',
+      accounts: '/api/accounts',
+      tags: '/api/tags',
+    },
+    documentation: 'See README.md for API details',
+  });
+});
+
 // Routes
 app.use('/api', require('./routes/transactions'));
 app.use('/api', require('./routes/categories'));
