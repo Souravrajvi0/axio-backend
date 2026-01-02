@@ -213,11 +213,11 @@ router.post('/transactions', async (req, res) => {
     await client.query('BEGIN');
     console.log('POST /api/transactions - Transaction begun');
 
-    const { merchant_name, amount, type, category_id, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
+    const { merchant_name, amount, type, category, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
 
     // Input validation
-    if (!merchant_name || !amount || !type || !category_id || !transaction_date) {
-      console.log('POST /api/transactions - Validation failed:', { merchant_name, amount, type, category_id, transaction_date });
+    if (!merchant_name || !amount || !type || !category || !transaction_date) {
+      console.log('POST /api/transactions - Validation failed:', { merchant_name, amount, type, category, transaction_date });
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Missing required fields',
@@ -225,7 +225,7 @@ router.post('/transactions', async (req, res) => {
           merchant_name: !merchant_name ? ['Merchant is required'] : undefined,
           amount: !amount ? ['Amount is required'] : undefined,
           type: !type ? ['Type is required'] : undefined,
-          category_id: !category_id ? ['Category is required'] : undefined,
+          category: !category ? ['Category is required'] : undefined,
           transaction_date: !transaction_date ? ['Date is required'] : undefined,
         }
       });
@@ -245,6 +245,25 @@ router.post('/transactions', async (req, res) => {
       return res.status(400).json({ 
         message: 'Amount must be a positive number' 
       });
+    }
+
+    // Resolve category to category_id
+    let category_id;
+    console.log('POST /api/transactions - Resolving category:', category);
+    if (category.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      // It's a UUID
+      category_id = category;
+      console.log('POST /api/transactions - Category is UUID:', category_id);
+    } else {
+      // Look up by name
+      const categoryResult = await client.query('SELECT id FROM categories WHERE name = $1', [category]);
+      if (categoryResult.rows.length === 0) {
+        console.log('POST /api/transactions - Category not found by name:', category);
+        await client.query('ROLLBACK');
+        return res.status(400).json({ message: 'Invalid category' });
+      }
+      category_id = categoryResult.rows[0].id;
+      console.log('POST /api/transactions - Category resolved to UUID:', category_id);
     }
 
     // Parse date
@@ -347,7 +366,7 @@ router.put('/transactions/:id', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { merchant_name, amount, type, category_id, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
+    const { merchant_name, amount, type, category, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
 
     // Input validation for provided fields
     if (type && type !== 'expense' && type !== 'income') {
@@ -391,7 +410,21 @@ router.put('/transactions/:id', async (req, res) => {
       updateValues.push(type);
       paramIndex++;
     }
-    if (category_id !== undefined) {
+    if (category !== undefined) {
+      // Resolve category to category_id
+      let category_id;
+      if (category.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        // It's a UUID
+        category_id = category;
+      } else {
+        // Look up by name
+        const categoryResult = await client.query('SELECT id FROM categories WHERE name = $1', [category]);
+        if (categoryResult.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ message: 'Invalid category' });
+        }
+        category_id = categoryResult.rows[0].id;
+      }
       updateFields.push(`category_id = $${paramIndex}`);
       updateValues.push(category_id);
       paramIndex++;
