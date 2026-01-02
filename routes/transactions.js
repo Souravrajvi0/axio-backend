@@ -119,7 +119,8 @@ async function buildTransactionQuery(filters) {
 }
 
 // Helper to get formatted transaction
-async function getFormattedTransaction(transactionId) {
+async function getFormattedTransaction(transactionId, client = null) {
+  const db = client || pool;
   const query = `
     SELECT
       t.id,
@@ -144,7 +145,7 @@ async function getFormattedTransaction(transactionId) {
     WHERE t.id = $1
     GROUP BY t.id, c.id, a.id
   `;
-  const result = await pool.query(query, [transactionId]);
+  const result = await db.query(query, [transactionId]);
   return result.rows[0];
 }
 
@@ -337,7 +338,7 @@ router.post('/transactions', async (req, res) => {
     console.log('POST /api/transactions - Transaction committed');
 
     // Return in frontend format
-    const formattedTransaction = await getFormattedTransaction(transaction.id);
+    const formattedTransaction = await getFormattedTransaction(transaction.id, client);
     console.log('POST /api/transactions - Returning formatted transaction');
 
     res.status(201).json(formattedTransaction);
