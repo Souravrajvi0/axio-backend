@@ -33,7 +33,7 @@ async function buildTransactionQuery(filters) {
       t.category_id,
       c.icon as categoryIcon,
       t.transaction_date,
-      t.transaction_time,
+      COALESCE(t.transaction_time, '00:00:00') as transaction_time,
       COALESCE(
         jsonb_agg(tag.name) FILTER (WHERE tag.name IS NOT NULL),
         '[]'::jsonb
@@ -129,7 +129,7 @@ async function getFormattedTransaction(transactionId) {
       t.category_id,
       c.icon as categoryIcon,
       t.transaction_date,
-      t.transaction_time,
+      COALESCE(t.transaction_time, '00:00:00') as transaction_time,
       COALESCE(
         jsonb_agg(tag.name) FILTER (WHERE tag.name IS NOT NULL),
         '[]'::jsonb
@@ -265,22 +265,24 @@ router.post('/transactions', async (req, res) => {
     const transaction = transactionResult.rows[0];
 
     // Handle tags
-    if (tags && tags.length > 0) {
+    if (Array.isArray(tags) && tags.length > 0) {
       for (const tagName of tags) {
-        // Upsert tag
-        const tagResult = await client.query(`
-          INSERT INTO tags (name) VALUES ($1)
-          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-          RETURNING id
-        `, [tagName]);
+        if (typeof tagName === 'string' && tagName.trim()) {
+          // Upsert tag
+          const tagResult = await client.query(`
+            INSERT INTO tags (name) VALUES ($1)
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id
+          `, [tagName.trim()]);
 
-        const tagId = tagResult.rows[0].id;
+          const tagId = tagResult.rows[0].id;
 
-        // Link tag to transaction
-        await client.query(
-          'INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ($1, $2)',
-          [transaction.id, tagId]
-        );
+          // Link tag to transaction
+          await client.query(
+            'INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ($1, $2)',
+            [transaction.id, tagId]
+          );
+        }
       }
     }
 
@@ -421,22 +423,24 @@ router.put('/transactions/:id', async (req, res) => {
     await client.query('DELETE FROM transaction_tags WHERE transaction_id = $1', [transaction.id]);
 
     // Handle new tags
-    if (tags && tags.length > 0) {
+    if (Array.isArray(tags) && tags.length > 0) {
       for (const tagName of tags) {
-        // Upsert tag
-        const tagResult = await client.query(`
-          INSERT INTO tags (name) VALUES ($1)
-          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-          RETURNING id
-        `, [tagName]);
+        if (typeof tagName === 'string' && tagName.trim()) {
+          // Upsert tag
+          const tagResult = await client.query(`
+            INSERT INTO tags (name) VALUES ($1)
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id
+          `, [tagName.trim()]);
 
-        const tagId = tagResult.rows[0].id;
+          const tagId = tagResult.rows[0].id;
 
-        // Link tag to transaction
-        await client.query(
-          'INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ($1, $2)',
-          [transaction.id, tagId]
-        );
+          // Link tag to transaction
+          await client.query(
+            'INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ($1, $2)',
+            [transaction.id, tagId]
+          );
+        }
       }
     }
 
