@@ -15,11 +15,19 @@ if (global.dbPool) {
 // GET /api/categories
 router.get('/categories', async (req, res) => {
   try {
+    if (!pool) {
+      return res.status(503).json({ 
+        message: 'Database not configured. Please set DATABASE_URL environment variable.' 
+      });
+    }
     const result = await pool.query('SELECT * FROM categories ORDER BY type, name');
     res.json(result.rows);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to fetch categories' });
+    console.error('Database error:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch categories',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

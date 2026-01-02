@@ -1,0 +1,6 @@
+Your DATABASE_URL for Vercel:
+
+postgresql://postgres.urwkdfgwmmevajcklwcr:DevRajvi%408086@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres
+
+Copy this entire string and paste it into Vercel Environment Variables.
+

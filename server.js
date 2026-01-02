@@ -12,14 +12,29 @@ const PORT = process.env.PORT || 3000;
 let pool;
 try {
   if (process.env.DATABASE_URL) {
+    let connectionString = process.env.DATABASE_URL;
+    
+    // For Supabase with serverless (Vercel), use Connection Pooler (port 6543)
+    // Direct connection (port 5432) can timeout with serverless functions
+    // Connection pooler is recommended: aws-0-REGION.pooler.supabase.com:6543
+    
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      // Add connection timeout for serverless
-      connectionTimeoutMillis: 5000,
-      query_timeout: 10000,
+      connectionString: connectionString,
+      // SSL configuration - Supabase supports both SSL and non-SSL
+      // Since SSL enforcement is off, we can try without SSL first
+      ssl: connectionString.includes('sslmode=require') ? {
+        rejectUnauthorized: false
+      } : false,
+      // Connection settings optimized for serverless (Vercel)
+      connectionTimeoutMillis: 10000,
+      query_timeout: 30000,
+      idleTimeoutMillis: 30000,
+      max: 1, // Single connection for serverless functions
+      allowExitOnIdle: true, // Allow process to exit when idle
     });
     // Make pool globally available for route files
     global.dbPool = pool;
+    console.log('Database pool created successfully');
   } else {
     console.warn('DATABASE_URL not set - database operations will fail');
   }
@@ -57,31 +72,59 @@ app.use('/api', require('./routes/transactions'));
 app.use('/api', require('./routes/categories'));
 app.use('/api', require('./routes/accounts'));
 app.use('/api', require('./routes/tags'));
+app.use('/api', require('./routes/seed'));
 
 // Health check
 app.get('/health', async (req, res) => {
   try {
-    if (pool) {
-      // Test database connection
-      await pool.query('SELECT 1');
-      res.json({ 
-        status: 'OK', 
-        database: 'connected',
-        timestamp: new Date().toISOString() 
-      });
-    } else {
-      res.status(503).json({ 
+    const hasEnvVar = !!process.env.DATABASE_URL;
+    const hasPool = !!pool;
+    
+    if (!hasEnvVar) {
+      return res.status(503).json({ 
         status: 'ERROR', 
         database: 'not configured',
+        message: 'DATABASE_URL environment variable is not set',
         timestamp: new Date().toISOString() 
       });
     }
-  } catch (error) {
-    res.status(503).json({ 
-      status: 'ERROR', 
-      database: 'connection failed',
+    
+    if (!hasPool) {
+      return res.status(503).json({ 
+        status: 'ERROR', 
+        database: 'pool not initialized',
+        message: 'DATABASE_URL is set but pool creation failed',
+        timestamp: new Date().toISOString() 
+      });
+    }
+    
+    // Test database connection
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'OK', 
+      database: 'connected',
       timestamp: new Date().toISOString() 
     });
+  } catch (error) {
+    console.error('Health check error:', error);
+    const errorInfo = {
+      status: 'ERROR', 
+      database: 'connection failed',
+      message: error.message,
+      code: error.code,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Add more details for debugging
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
+      errorInfo.hint = 'Check if database host and port are correct. For Supabase, try using connection pooler (port 6543) instead of direct connection (port 5432)';
+    } else if (error.code === '28P01') {
+      errorInfo.hint = 'Authentication failed. Check your database password. Make sure special characters are URL-encoded (@ = %40)';
+    } else if (error.code === '3D000') {
+      errorInfo.hint = 'Database does not exist. Check database name in connection string';
+    }
+    
+    res.status(503).json(errorInfo);
   }
 });
 

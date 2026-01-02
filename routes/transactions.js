@@ -27,12 +27,13 @@ async function buildTransactionQuery(filters) {
   let query = `
     SELECT
       t.id,
-      t.merchant_name as merchant,
+      t.merchant_name,
       t.amount,
       t.type,
-      t.category_id as category,
+      t.category_id,
       c.icon as categoryIcon,
-      (t.transaction_date || 'T' || COALESCE(t.transaction_time::text, '00:00:00'))::timestamptz as date,
+      t.transaction_date,
+      t.transaction_time,
       COALESCE(
         jsonb_agg(tag.name) FILTER (WHERE tag.name IS NOT NULL),
         '[]'::jsonb
@@ -122,12 +123,13 @@ async function getFormattedTransaction(transactionId) {
   const query = `
     SELECT
       t.id,
-      t.merchant_name as merchant,
+      t.merchant_name,
       t.amount,
       t.type,
-      t.category_id as category,
+      t.category_id,
       c.icon as categoryIcon,
-      (t.transaction_date || 'T' || COALESCE(t.transaction_time::text, '00:00:00'))::timestamptz as date,
+      t.transaction_date,
+      t.transaction_time,
       COALESCE(
         jsonb_agg(tag.name) FILTER (WHERE tag.name IS NOT NULL),
         '[]'::jsonb
@@ -149,6 +151,11 @@ async function getFormattedTransaction(transactionId) {
 // GET /api/transactions
 router.get('/transactions', async (req, res) => {
   try {
+    if (!pool) {
+      return res.status(503).json({ 
+        message: 'Database not configured. Please set DATABASE_URL environment variable.' 
+      });
+    }
     const filters = {
       startDate: req.query.startDate,
       endDate: req.query.endDate,
@@ -165,8 +172,11 @@ router.get('/transactions', async (req, res) => {
 
     res.json(result.rows);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Failed to fetch transactions' });
+    console.error('Database error:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
@@ -192,19 +202,19 @@ router.post('/transactions', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { merchant, amount, type, category, tags, notes, paymentMethod, date } = req.body;
+    const { merchant_name, amount, type, category_id, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
 
     // Input validation
-    if (!merchant || !amount || !type || !category || !date) {
+    if (!merchant_name || !amount || !type || !category_id || !transaction_date) {
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Missing required fields',
         errors: {
-          merchant: !merchant ? ['Merchant is required'] : undefined,
+          merchant_name: !merchant_name ? ['Merchant is required'] : undefined,
           amount: !amount ? ['Amount is required'] : undefined,
           type: !type ? ['Type is required'] : undefined,
-          category: !category ? ['Category is required'] : undefined,
-          date: !date ? ['Date is required'] : undefined,
+          category_id: !category_id ? ['Category is required'] : undefined,
+          transaction_date: !transaction_date ? ['Date is required'] : undefined,
         }
       });
     }
@@ -224,15 +234,8 @@ router.post('/transactions', async (req, res) => {
     }
 
     // Parse date
-    const transactionDate = new Date(date);
-    if (isNaN(transactionDate.getTime())) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ 
-        message: 'Invalid date format' 
-      });
-    }
-    const transaction_date = transactionDate.toISOString().split('T')[0];
-    const transaction_time = transactionDate.toTimeString().split(' ')[0];
+    const transaction_date_str = transaction_date;
+    const transaction_time_str = transaction_time || '00:00:00';
 
     // Get account ID
     let account_id = null;
@@ -257,7 +260,7 @@ router.post('/transactions', async (req, res) => {
         transaction_date, transaction_time, notes, source
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'manual')
       RETURNING *
-    `, [merchant, amount, type, category, account_id, transaction_date, transaction_time, notes]);
+    `, [merchant_name, amount, type, category_id, account_id, transaction_date_str, transaction_time_str, notes]);
 
     const transaction = transactionResult.rows[0];
 
@@ -308,7 +311,7 @@ router.put('/transactions/:id', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const { merchant, amount, type, category, tags, notes, paymentMethod, date } = req.body;
+    const { merchant_name, amount, type, category_id, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
 
     // Input validation for provided fields
     if (type && type !== 'expense' && type !== 'income') {
@@ -326,17 +329,10 @@ router.put('/transactions/:id', async (req, res) => {
     }
 
     // Parse date if provided
-    let transaction_date, transaction_time;
-    if (date) {
-      const transactionDate = new Date(date);
-      if (isNaN(transactionDate.getTime())) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({ 
-          message: 'Invalid date format' 
-        });
-      }
-      transaction_date = transactionDate.toISOString().split('T')[0];
-      transaction_time = transactionDate.toTimeString().split(' ')[0];
+    let transaction_date_str, transaction_time_str;
+    if (transaction_date) {
+      transaction_date_str = transaction_date;
+      transaction_time_str = transaction_time || '00:00:00';
     }
 
     // Build dynamic update query
@@ -344,9 +340,9 @@ router.put('/transactions/:id', async (req, res) => {
     const updateValues = [];
     let paramIndex = 1;
 
-    if (merchant !== undefined) {
+    if (merchant_name !== undefined) {
       updateFields.push(`merchant_name = $${paramIndex}`);
-      updateValues.push(merchant);
+      updateValues.push(merchant_name);
       paramIndex++;
     }
     if (amount !== undefined) {
@@ -359,9 +355,9 @@ router.put('/transactions/:id', async (req, res) => {
       updateValues.push(type);
       paramIndex++;
     }
-    if (category !== undefined) {
+    if (category_id !== undefined) {
       updateFields.push(`category_id = $${paramIndex}`);
-      updateValues.push(category);
+      updateValues.push(category_id);
       paramIndex++;
     }
     if (paymentMethod !== undefined) {
@@ -384,12 +380,12 @@ router.put('/transactions/:id', async (req, res) => {
       updateValues.push(account_id);
       paramIndex++;
     }
-    if (date !== undefined) {
+    if (transaction_date !== undefined) {
       updateFields.push(`transaction_date = $${paramIndex}`);
-      updateValues.push(transaction_date);
+      updateValues.push(transaction_date_str);
       paramIndex++;
       updateFields.push(`transaction_time = $${paramIndex}`);
-      updateValues.push(transaction_time);
+      updateValues.push(transaction_time_str);
       paramIndex++;
     }
     if (notes !== undefined) {
