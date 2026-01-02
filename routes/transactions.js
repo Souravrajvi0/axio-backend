@@ -257,7 +257,7 @@ router.post('/transactions', async (req, res) => {
       console.log('POST /api/transactions - Category is UUID:', resolvedCategoryId);
     } else {
       // Look up by name
-      const categoryResult = await client.query('SELECT id FROM categories WHERE name = $1', [categoryValue]);
+      const categoryResult = await client.query('SELECT id FROM categories WHERE LOWER(name) = LOWER($1)', [categoryValue]);
       if (categoryResult.rows.length === 0) {
         console.log('POST /api/transactions - Category not found by name:', categoryValue);
         await client.query('ROLLBACK');
@@ -420,7 +420,7 @@ router.put('/transactions/:id', async (req, res) => {
         resolved_category_id = categoryValue;
       } else {
         // Look up by name
-        const categoryResult = await client.query('SELECT id FROM categories WHERE name = $1', [categoryValue]);
+        const categoryResult = await client.query('SELECT id FROM categories WHERE LOWER(name) = LOWER($1)', [categoryValue]);
         if (categoryResult.rows.length === 0) {
           await client.query('ROLLBACK');
           return res.status(400).json({ message: 'Invalid category' });
