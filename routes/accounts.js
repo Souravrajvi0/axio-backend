@@ -14,16 +14,19 @@ if (global.dbPool) {
 
 // GET /api/accounts
 router.get('/accounts', async (req, res) => {
+  console.log('GET /api/accounts - Fetching accounts');
   try {
     if (!pool) {
+      console.error('GET /api/accounts - Database not configured');
       return res.status(503).json({ 
         message: 'Database not configured. Please set DATABASE_URL environment variable.' 
       });
     }
     const result = await pool.query('SELECT * FROM accounts ORDER BY name');
+    console.log(`GET /api/accounts - Found ${result.rows.length} accounts`);
     res.json(result.rows);
   } catch (error) {
-    console.error('Database error:', error);
+    console.error('GET /api/accounts - Database error:', error);
     res.status(500).json({ 
       message: 'Failed to fetch accounts',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -33,10 +36,13 @@ router.get('/accounts', async (req, res) => {
 
 // POST /api/accounts
 router.post('/accounts', async (req, res) => {
+  console.log('POST /api/accounts - Creating account');
+  console.log('Request body:', req.body);
   try {
     const { name, type } = req.body;
 
     if (!name || !type) {
+      console.log('POST /api/accounts - Validation failed: missing name or type');
       return res.status(400).json({ message: 'Name and type are required' });
     }
 
@@ -44,10 +50,11 @@ router.post('/accounts', async (req, res) => {
       'INSERT INTO accounts (name, type) VALUES ($1, $2) RETURNING *',
       [name, type]
     );
+    console.log('POST /api/accounts - Account created:', result.rows[0]);
 
     res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error(error);
+    console.error('POST /api/accounts - Error:', error);
     if (error.code === '23505') { // Unique violation
       res.status(400).json({ message: 'Account name already exists' });
     } else {

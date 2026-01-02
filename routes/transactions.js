@@ -150,8 +150,11 @@ async function getFormattedTransaction(transactionId) {
 
 // GET /api/transactions
 router.get('/transactions', async (req, res) => {
+  console.log('GET /api/transactions - Fetching transactions');
+  console.log('Query params:', req.query);
   try {
     if (!pool) {
+      console.error('GET /api/transactions - Database not configured');
       return res.status(503).json({ 
         message: 'Database not configured. Please set DATABASE_URL environment variable.' 
       });
@@ -166,13 +169,17 @@ router.get('/transactions', async (req, res) => {
       limit: req.query.limit ? parseInt(req.query.limit) : null,
       offset: req.query.offset ? parseInt(req.query.offset) : null,
     };
+    console.log('Applied filters:', filters);
 
     const { query, params } = await buildTransactionQuery(filters);
+    console.log('Executing query:', query);
+    console.log('Query params:', params);
     const result = await pool.query(query, params);
+    console.log(`GET /api/transactions - Found ${result.rows.length} transactions`);
 
     res.json(result.rows);
   } catch (error) {
-    console.error('Database error:', error);
+    console.error('GET /api/transactions - Database error:', error);
     res.status(500).json({ 
       message: 'Failed to fetch transactions',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -198,14 +205,19 @@ router.get('/transactions/:id', async (req, res) => {
 
 // POST /api/transactions
 router.post('/transactions', async (req, res) => {
+  console.log('POST /api/transactions - Creating transaction');
+  console.log('Request body:', req.body);
   const client = await pool.connect();
+  console.log('POST /api/transactions - Database client connected');
   try {
     await client.query('BEGIN');
+    console.log('POST /api/transactions - Transaction begun');
 
     const { merchant_name, amount, type, category_id, tags, notes, paymentMethod, transaction_date, transaction_time } = req.body;
 
     // Input validation
     if (!merchant_name || !amount || !type || !category_id || !transaction_date) {
+      console.log('POST /api/transactions - Validation failed:', { merchant_name, amount, type, category_id, transaction_date });
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Missing required fields',
@@ -220,6 +232,7 @@ router.post('/transactions', async (req, res) => {
     }
 
     if (type !== 'expense' && type !== 'income') {
+      console.log('POST /api/transactions - Invalid type:', type);
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Invalid type. Must be "expense" or "income"' 
@@ -227,6 +240,7 @@ router.post('/transactions', async (req, res) => {
     }
 
     if (isNaN(amount) || parseFloat(amount) < 0) {
+      console.log('POST /api/transactions - Invalid amount:', amount);
       await client.query('ROLLBACK');
       return res.status(400).json({ 
         message: 'Amount must be a positive number' 
@@ -236,24 +250,30 @@ router.post('/transactions', async (req, res) => {
     // Parse date
     const transaction_date_str = transaction_date;
     const transaction_time_str = transaction_time || '00:00:00';
+    console.log('POST /api/transactions - Parsed dates:', { transaction_date_str, transaction_time_str });
 
     // Get account ID
     let account_id = null;
     if (paymentMethod) {
+      console.log('POST /api/transactions - Looking up account for paymentMethod:', paymentMethod);
       const accountResult = await client.query('SELECT id FROM accounts WHERE name = $1', [paymentMethod]);
       if (accountResult.rows.length > 0) {
         account_id = accountResult.rows[0].id;
+        console.log('POST /api/transactions - Found existing account:', account_id);
       } else {
+        console.log('POST /api/transactions - Creating new account for:', paymentMethod);
         // Create account if not exists
         const newAccount = await client.query(
           'INSERT INTO accounts (name, type) VALUES ($1, $2) RETURNING id',
           [paymentMethod, 'other']
         );
         account_id = newAccount.rows[0].id;
+        console.log('POST /api/transactions - Created new account:', account_id);
       }
     }
 
     // Insert transaction
+    console.log('POST /api/transactions - Inserting transaction with params:', [merchant_name, amount, type, category_id, account_id, transaction_date_str, transaction_time_str, notes]);
     const transactionResult = await client.query(`
       INSERT INTO transactions (
         merchant_name, amount, type, category_id, account_id,
@@ -263,11 +283,14 @@ router.post('/transactions', async (req, res) => {
     `, [merchant_name, amount, type, category_id, account_id, transaction_date_str, transaction_time_str, notes]);
 
     const transaction = transactionResult.rows[0];
+    console.log('POST /api/transactions - Transaction inserted:', transaction.id);
 
     // Handle tags
     if (Array.isArray(tags) && tags.length > 0) {
+      console.log('POST /api/transactions - Processing tags:', tags);
       for (const tagName of tags) {
         if (typeof tagName === 'string' && tagName.trim()) {
+          console.log('POST /api/transactions - Upserting tag:', tagName.trim());
           // Upsert tag
           const tagResult = await client.query(`
             INSERT INTO tags (name) VALUES ($1)
@@ -276,34 +299,45 @@ router.post('/transactions', async (req, res) => {
           `, [tagName.trim()]);
 
           const tagId = tagResult.rows[0].id;
+          console.log('POST /api/transactions - Tag ID:', tagId);
 
           // Link tag to transaction
           await client.query(
             'INSERT INTO transaction_tags (transaction_id, tag_id) VALUES ($1, $2)',
             [transaction.id, tagId]
           );
+          console.log('POST /api/transactions - Linked tag to transaction');
         }
       }
+    } else {
+      console.log('POST /api/transactions - No tags to process');
     }
 
     await client.query('COMMIT');
+    console.log('POST /api/transactions - Transaction committed');
 
     // Return in frontend format
     const formattedTransaction = await getFormattedTransaction(transaction.id);
+    console.log('POST /api/transactions - Returning formatted transaction');
 
     res.status(201).json(formattedTransaction);
   } catch (error) {
+    console.error('POST /api/transactions - Error creating transaction:', error);
     await client.query('ROLLBACK');
-    console.error('Error creating transaction:', error);
+    console.log('POST /api/transactions - Transaction rolled back');
     if (error.code === '23503') { // Foreign key violation
+      console.error('POST /api/transactions - Foreign key violation:', error.detail);
       res.status(400).json({ message: 'Invalid category or account reference' });
     } else if (error.code === '23505') { // Unique violation
+      console.error('POST /api/transactions - Unique violation:', error.detail);
       res.status(400).json({ message: 'Transaction already exists' });
     } else {
+      console.error('POST /api/transactions - Unexpected error:', error);
       res.status(500).json({ message: 'Failed to create transaction' });
     }
   } finally {
     client.release();
+    console.log('POST /api/transactions - Database client released');
   }
 });
 

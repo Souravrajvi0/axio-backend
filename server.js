@@ -5,8 +5,12 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const { Pool } = require('pg');
 
+console.log('Starting server...');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+console.log(`Server port: ${PORT}`);
 
 // Database connection - shared pool for all routes
 let pool;
@@ -43,6 +47,7 @@ try {
 }
 
 // Middleware
+console.log('Setting up middleware...');
 app.use(helmet());
 app.use(morgan('combined'));
 app.use(cors({
@@ -52,6 +57,7 @@ app.use(express.json());
 
 // Root route - API information
 app.get('/', (req, res) => {
+  console.log('GET / - API info requested');
   res.json({
     name: 'SpendGuard Backend API',
     version: '1.0.0',
@@ -68,6 +74,7 @@ app.get('/', (req, res) => {
 });
 
 // Routes
+console.log('Loading routes...');
 app.use('/api', require('./routes/transactions'));
 app.use('/api', require('./routes/categories'));
 app.use('/api', require('./routes/accounts'));
@@ -76,11 +83,13 @@ app.use('/api', require('./routes/seed'));
 
 // Health check
 app.get('/health', async (req, res) => {
+  console.log('GET /health - Health check requested');
   try {
     const hasEnvVar = !!process.env.DATABASE_URL;
     const hasPool = !!pool;
     
     if (!hasEnvVar) {
+      console.warn('Health check: DATABASE_URL not set');
       return res.status(503).json({ 
         status: 'ERROR', 
         database: 'not configured',
@@ -90,6 +99,7 @@ app.get('/health', async (req, res) => {
     }
     
     if (!hasPool) {
+      console.warn('Health check: Pool not initialized');
       return res.status(503).json({ 
         status: 'ERROR', 
         database: 'pool not initialized',
@@ -99,7 +109,9 @@ app.get('/health', async (req, res) => {
     }
     
     // Test database connection
+    console.log('Health check: Testing database connection...');
     await pool.query('SELECT 1');
+    console.log('Health check: Database connection successful');
     res.json({ 
       status: 'OK', 
       database: 'connected',
@@ -130,15 +142,17 @@ app.get('/health', async (req, res) => {
 
 // Error handling
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Global error handler:', err.stack);
   res.status(500).json({ message: 'Something went wrong!' });
 });
 
 // Export for Vercel serverless
+console.log('Exporting app for Vercel serverless');
 module.exports = app;
 
 // Start server locally
 if (require.main === module) {
+  console.log(`Starting server on port ${PORT}...`);
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
